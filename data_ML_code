@@ -1,0 +1,375 @@
+library(caret)
+library(data.table)
+library(dplyr)
+library(e1071)
+library(gains)
+library(Hmisc)
+library(party)
+library(plyr)
+library(pROC)
+library(randomForest)
+library(rattle)
+library(RColorBrewer)
+library(reshape)
+library(ROCR)
+library(RODBC)
+library(ROSE)
+library(rpart)
+library(rpart.plot)
+library(sqldf)
+library(woeBinning)
+library(rpart)
+
+rm(list=ls())
+
+dbhandle <- odbcDriverConnect('driver={SQL Server};server=10.*.*.*;database=databaseName;trusted_connection=true')
+dbhandle  
+
+## retrieve data from database
+Read_in_Data <- sqlQuery(dbhandle, "SELECT  A.[x1]
+                         ,... SQL code
+                        )
+
+data3<-merge(data1,data2,by="common_key")
+data3<-merge(data1,data2,by=c("common_key1","common_key2"))
+
+data4 <-data3[,-c(4,5,6,7:9)]
+
+data5<-data4[,!(names(data4)%in% drop_list )]
+
+# Get data in data6 not in data5
+data7<-data6[!(data6$Key %in% data5$Key), ]
+
+data8$x <-data8$x <-"NULL"
+data8$x <-data8$x <- -1
+
+data9<-rbind.fill(dataA,dataB)
+
+table(data9$Y)
+prop.table(table(data9$Y))
+colMeans(is.na(data9))  # find missing percent of columns
+
+data9$Y <-as.factor(data9$Y)
+data9$x <-as.numeric(data9$X)
+
+#library(woeBinning)
+binning <-woe.binning(data9,'Y',c("X1","X2"))
+
+## woe.binning.plot(binning)
+tabulate.binning <- woe.binning.table(binning)
+tabulate.binning
+
+## add binning variables to dataset
+##
+data9.with.binned.vars.added <- woe.binning.deploy(data9,binning,add.woe.or.dum.var='woe')
+## table(Combined_File3_bus.with.binned.vars.added$GRP)
+## remove original binned variable and type 2 binned var
+var_woe <- c("X1","X2","woe.X1.binned","woe.X2.binned")
+
+#library(data.table)
+fwrite(data9,"C:\\myfolder\\data9.csv")
+data9<-read.csv("C:\\myfolder\\data9.csv")
+setwd("D://OtherFolder//")
+save(data8,file="data8.rda")
+load(file="data8.rda")
+
+str(data8,list.len=ncol(data8)) ## show all the structure in the data
+## impute missing 
+## Note: roughfix is under randomForest library
+## colMeans(is.na(data8.roughfix))
+data8.roughfix<-na.roughfix(data8)
+
+data9$target_flag <- ifelse(data9$Y=='1', c("1"), c("0"))
+data9$target_flag<-as.factor(data9$target_flag)
+
+## create model training and validation sample
+samp_t <- sample(nrow(data9), 0.6 * nrow(data9))
+data9_t<-data9[samp_t, ]
+data9_v <-data9[-samp_t, ]
+
+## over sample training data
+
+data_balanced_under<- ovun.sample(target_flag ~ ., data =data9_t,method = "under", p=0.4, seed = 1)$data
+
+prop.table(table(data9$target_flag))
+# run random forest
+# target_flag is factor type
+
+Rdf.rf <- randomForest(target_flag~.,
+                               data=data_balanced_under, 
+                               keep.forest=TRUE, importance=TRUE,na.action = na.roughfix)
+
+## save(participant_bus.rf,file="participant_bus_rf.rda")
+## load(file="participant_bus_rf.rda")
+
+importance <- varImp(participant_bus.rf, scale=FALSE)
+importance
+
+#score
+data9$pred_rf<-predict(Rdf.rf, data9_v, type="prob")[,2]
+
+# scale prediction to probability
+data9$c <-sum(data9$target_g=="1")/sum(data9$pred_rf)
+data9$pred_rff<-data9$pred_rf*data9$c
+
+data9 <- data9[,!(names(data9) %in% c("pred_rf"))]
+colnames(data9)[colnames(data9) == "pred_rff"] <- "pred_rf"
+
+pgm_list<-c("Pgm1","Pgm2","Pgm3")
+target_pgm <-c("target_pgm1","target_pgm2","target_pgm3")
+
+for (i in 1:40) 
+{
+  if (i==5) next  # skip loop 5
+
+  Bus_model_GRP$target_p <- ifelse(Bus_model_GRP$Measure_ProgramAcronym==bus_pgm_list[i], c("1"), c("0") )
+  Bus_model_GRP$target_p <-as.factor(Bus_model_GRP$target_p)
+  colnames(Bus_model_GRP)[colnames(Bus_model_GRP) == "target_p"] <- target_bus_pgm[i]
+}
+
+sub_data <- subset(data9,data9$target_flag=="1")
+
+data_sql<-sqldf("select PostalCode , min(Cost) as cost,
+                       avg(price) as price
+                       from  data9 
+                       group by PostalCode")
+
+Bus <- Bus %>%
+    mutate(tmp=ifelse((!is.na(cost)&(target_flag=='1')),cost, csot_zip)) %>%
+    mutate(cost_netTherm=ifelse((!is.na(tmp)),tmp,net_measure))
+
+zip_lvl_cost<-sqldf("SELECT PostalCode, min_net_zip, Savings,Cost
+                      from zip_min_id 
+                      order by Code, Cost asc")   # sort by ascending order
+# select firt row after sorting
+
+  zip_lvl_cost2<-sqldf("select min(rowid) rowid,PostalCode ,net_zip , Cost,
+                       from  zip_lvl_cost 
+                       group by PostalCode")
+
+
+
+# computer cumulative lift/gain chart
+lift <- function(depvar, predcol, groups=10) {
+  if(!require(dplyr)){
+    install.packages("dplyr")
+    library(dplyr)}
+  if(is.factor(depvar)) depvar <- as.integer(as.character(depvar))
+  if(is.factor(predcol)) predcol <- as.integer(as.character(predcol))
+  helper = data.frame(cbind(depvar, predcol))
+  helper[,"bucket"] = ntile(-helper[,"predcol"], groups)
+  gaintable = helper %>% group_by(bucket)  %>%
+    summarise_at(vars(depvar), funs(total = n(),
+                                    totalresp=sum(., na.rm = TRUE))) %>%
+    mutate(Cumresp = cumsum(totalresp),
+           Gain=Cumresp/sum(totalresp)*100,
+           Cumlift=Gain/(bucket*(100/groups)))
+  return(gaintable)
+}
+
+dt = lift(myData$Y, myData_v$pred_Y, groups = 10)
+dt
+        
+
+# Load the party package. It will automatically load other required packages.
+install.packages(party)
+install.packages(xgboost)
+install.packages('xgboost')
+library(party)
+library(xgboost)
+library(readr)
+library(haven) # enable R to read other stats dataset with other format (like SAS)
+
+supp <- read_sas("/data/lake/gbds/one_million_300k_sample_r.sas7bdat")
+
+nrow(supp)
+
+## select the variables from the dataset
+MUW_1 <- supp[,(names(supp)%in% c("var1",
+                                  "var2",
+                                  "var3",
+                                  "var4",
+                                  "dep_var"
+))]
+
+str(MUW_1) # check the structure of the data 
+sapply(MUW_1, class)  # show the types of all variables in the data
+dim(MUW_1) # check number of rows and columns
+
+# change the dependent variable name to target
+
+MUW_1$indicator2 <- as.integer(MUW_1$indicator2) 
+MUW_1 <- transform(MUW_1, target = indicator2 )
+MUW_1 = subset(MUW_1, select = -c(indicator2))
+table(MUW_1$target) ## make sure check this value
+
+## change character variables to factor
+MUW_1$ACTV_ACTN_IND <- as.factor(MUW_1$var1);
+MUW_1$ADD_COV_RATE_IND <- as.factor(MUW_1$var2);
+##???
+
+## create hold out sample (2018 year)
+hold <- subset(MUW_1, eff_yr_n > 2017)
+model_dt <-subset(MUW_1,eff_yr_n < 2018)
+model_dt <-subset(model_dt,select = -c(eff_yr_n) )
+hold<-subset(hold,select = -c(eff_yr_n) )
+
+# create a random sample for training and test (60% vs. 40% )
+set.seed(123)
+ind <-sample(2, nrow(model_dt),replace=TRUE,prob=c(0.60,0.40))
+train<-model_dt[ind==1,]  #  60% random sample
+test<-model_dt[ind==2,] # 40% random sample
+
+nrow(train)
+nrow(test)
+nrow(hold)
+
+
+## For Xgboost (latest GBM) also see reference at  https://rdrr.io/cran/xgboost/man/xgb.train.html
+
+library(xgboost)
+
+## convert the data into matrix form
+xgb_matrix<-xgb.DMatrix(data.matrix( train[ , !(names(train)%in% c("target"))]), label=train$target )
+xgb_matrix_test<-xgb.DMatrix(data.matrix(test[ , !(names(test)%in% c("target"))]), label=test$target )
+xgb_matrix_hold<-xgb.DMatrix(data.matrix(hold[ , !(names(hold)%in% c("target"))]), label=hold$target )
+
+# define parameters for xgboost 
+xgb_params_1=list(objective="binary:logistic", eta=0.1, max.depth=3, subsample=0.8)
+
+#cross validation setup. In fact nrounds=1000 is good enough for this dataset 
+xgb_cv=xgb.cv(data=xgb_matrix,params=xgb_params_1,nrounds=5000,early_stopping_rounds=50,nthread=2,nfold=5,showsd=TRUE,verbose=TRUE,
+              print_every_n=30
+)
+
+## run xgboost - advanced version of GBM
+
+xgb_fit=xgboost(data=xgb_matrix,params=xgb_params_1,
+                nrounds=xgb_cv$best_ntreelimit,verbose=TRUE,nthread=3)
+
+##xgb_fit=xgboost(data=xgb_matrix,params=xgb_params_1,
+##                nrounds=40,verbose=TRUE,nthread=3)
+
+print(xgb_cv)
+
+## print out the most important variable by rank (high to low)
+importance_matrix <-xgb.importance(model=xgb_fit)
+importance_matrix[1:70,]
+
+## create predicted value 
+prediction_train=predict(xgb_fit,xgb_matrix)
+prediction_test=predict(xgb_fit,xgb_matrix_test)
+prediction_hold=predict(xgb_fit,xgb_matrix_hold)
+
+train$pred_target <-prediction_train
+test$pred_target  <-prediction_test
+hold$pred_target <- prediction_hold
+
+
+## ROC curve
+
+library(pROC)
+## ROC curve
+## train
+plot(roc(train$target, train$pred_target, direction="<"),
+     col="blue", lwd=3, main="The ROC")
+
+roc_obj <- roc(train$target, train$pred_target)
+auc(roc_obj)
+
+## test
+plot(roc(test$target, test$pred_target, direction="<"),
+     col="green", lwd=3, main="The ROC")
+
+roc_obj <- roc(test$target, test$pred_target)
+auc(roc_obj)
+
+## hold
+plot(roc(hold$target, hold$pred_target, direction="<"),
+     col="orange", lwd=3, main="The ROC")
+
+roc_obj <- roc(hold$target, hold$pred_target)
+auc(roc_obj)
+
+## create table for gain chart
+library(gains)
+
+gains_t <- gains(as.numeric(train$target), train$pred_target, groups=10, 
+                 ties.method=c("max","min","first","average","random"),
+                 conf=c("none","normal","t","boot"), boot.reps=1000, conf.level=0.95, 
+                 optimal=FALSE,percents=FALSE)
+gains_t
+
+gains_v <- gains(as.numeric(test$target), test$pred_target, groups=10, 
+                 ties.method=c("max","min","first","average","random"),
+                 conf=c("none","normal","t","boot"), boot.reps=1000, conf.level=0.95, 
+                 optimal=FALSE,percents=FALSE)
+gains_v
+
+gains_h <- gains(as.numeric(hold$target), hold$pred_target, groups=10, 
+                 ties.method=c("max","min","first","average","random"),
+                 conf=c("none","normal","t","boot"), boot.reps=1000, conf.level=0.95, 
+                 optimal=FALSE,percents=FALSE)
+gains_h     
+
+## Decision Tree
+install.packages("rpart.plot")
+install.packages('rattle')
+install.packages('RColorBrewer')
+library(rpart)
+library(rattle)
+library(RColorBrewer)
+library(rpart.plot)
+
+data("iris")
+table(iris$Species)
+
+fit<-rpart(Species~.,data=iris,method="class")
+plot(fit)
+
+fancyRpartPlot(fit)           
+
+##
+## compute ROC/AUC on validation data
+roc.curve(data9_data_v$target_g, data9_data_v$pred_rf, plotit = F)
+#Area under the curve (AUC): 0.992
+auc(data9_data_v$target_g,data9_data_v$pred_rf)
+#Area under the curve: 0.9921
+
+## use this version of ROC/AUC
+pred<-prediction(data_balanced_under$pred_rf,data_balanced_under$target_g)
+perf<-performance(pred,"tpr", "fpr")
+plot(perf)
+auc<- performance(pred,"auc")@y.values[[1]]
+auc
+## 0.992533
+
+pred<-prediction(data9_data_t$pred_rf,data9_data_t$target_g)
+perf<-performance(pred,"tpr", "fpr")
+plot(perf)
+auc<- performance(pred,"auc")@y.values[[1]]
+auc
+## 0.9920799
+
+## Pivot table
+b<- GRP
+
+b1<- b %>% distinct # remove duplications
+
+mysample <-b1[sample(1:nrow(b1), 50000,
+                                 replace=FALSE),] 
+
+var_id<-c("x_id1","x_id2")
+var_t<-c("t1","t2")
+
+var_all_t<-c(var_id,var_t)
+
+d_all_t <-mysample[var_all_t]
+
+## library(reshape)
+## transpose the data: use var_id as id (not transpose). Transpose only var_t
+mdata_t <- melt(d_all_t, id=var_id)
+
+# rename columns 
+colnames(mdata_t)[colnames(mdata_t) == "variable"] <- "t1"
+colnames(mdata_t)[colnames(mdata_t) == "value"] <- "t2"
